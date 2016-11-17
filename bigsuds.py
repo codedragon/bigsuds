@@ -3,12 +3,12 @@
 
 See the documentation for the L{BIGIP} class for usage examples.
 """
-import httplib
+import http.client
 import logging
 import os
 import re
 import ssl
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 from xml.sax import SAXParseException
 
 import suds.client
@@ -28,7 +28,7 @@ __version__ = '1.0.4'
 suds.client.ObjectCache = lambda **kwargs: None
 
 # We need to add support for SSL Contexts for Python 2.7.9+
-class HTTPSHandlerNoVerify(urllib2.HTTPSHandler):
+class HTTPSHandlerNoVerify(urllib.request.HTTPSHandler):
     def __init__(self, *args, **kwargs):
         try:
             kwargs['context'] = ssl._create_unverified_context()
@@ -37,7 +37,7 @@ class HTTPSHandlerNoVerify(urllib2.HTTPSHandler):
             # verification
             pass
 
-        urllib2.HTTPSHandler.__init__(self, *args, **kwargs)
+        urllib.request.HTTPSHandler.__init__(self, *args, **kwargs)
 
 class HTTPSTransportNoVerify(HttpAuthenticated):
     def u2handlers(self):
@@ -162,11 +162,11 @@ class BIGIP(object):
             client = get_client(self._hostname, wsdl_name, self._username,
                                 self._password, self._cachedir, self._verify,
                                 self._timeout,self._port)
-        except SAXParseException, e:
+        except SAXParseException as e:
             raise ParseError('%s\nFailed to parse wsdl. Is "%s" a valid '
                     'namespace?' % (e, wsdl_name))
         # One situation that raises TransportError is when credentials are bad.
-        except (urllib2.URLError, TransportError), e:
+        except (urllib.error.URLError, TransportError) as e:
             raise ConnectionError(str(e))
         return self._create_client_wrapper(client, wsdl_name)
 
@@ -184,7 +184,7 @@ class BIGIP(object):
         wsdl_hierarchy = get_wsdls(self._hostname, self._username,
                                    self._password, self._verify,
                                    self._timeout, self._port)
-        for namespace, attr_list in wsdl_hierarchy.iteritems():
+        for namespace, attr_list in wsdl_hierarchy.items():
             ns = getattr(self, namespace)
             ns.set_attr_list(attr_list)
 
@@ -289,7 +289,7 @@ def get_wsdls(hostname, username='admin', password='admin', verify=False,
     url = 'https://%s:%s/iControl/iControlPortal.cgi' % (hostname, port)
     regex = re.compile(r'/iControl/iControlPortal.cgi\?WSDL=([^"]+)"')
 
-    auth_handler = urllib2.HTTPBasicAuthHandler()
+    auth_handler = urllib.request.HTTPBasicAuthHandler()
     # 10.1.0 has a realm of "BIG-IP"
     auth_handler.add_password(uri='https://%s:%s/' % (hostname, port),
                               user=username, passwd=password, realm="BIG-IP")
@@ -297,12 +297,12 @@ def get_wsdls(hostname, username='admin', password='admin', verify=False,
     auth_handler.add_password(uri='https://%s:%s/' % (hostname, port),
                               user=username, passwd=password, realm="BIG\-IP")
     if verify:
-        opener = urllib2.build_opener(auth_handler)
+        opener = urllib.request.build_opener(auth_handler)
     else:
-        opener = urllib2.build_opener(auth_handler, HTTPSHandlerNoVerify)
+        opener = urllib.request.build_opener(auth_handler, HTTPSHandlerNoVerify)
     try:
         result = opener.open(url, timeout=timeout)
-    except urllib2.URLError, e:
+    except urllib.error.URLError as e:
         raise ConnectionError(str(e))
 
     wsdls = {}
@@ -409,7 +409,7 @@ class _ClientWrapper(object):
         # Looks up the corresponding suds method and returns a wrapped version.
         try:
             method = getattr(self._client.service, attr)
-        except _MethodNotFound, e:
+        except _MethodNotFound as e:
             e.__class__ = MethodNotFound
             raise
 
@@ -465,23 +465,23 @@ def _wrap_method(method, wsdl_name, arg_processor, result_processor, usage):
             # Oddly, this seems to happen when the wrong password is used.
             raise ConnectionError('iControl call failed, possibly invalid '
                     'credentials.')
-        except _MethodNotFound, e:
+        except _MethodNotFound as e:
             e.__class__ = MethodNotFound
             raise
-        except WebFault, e:
+        except WebFault as e:
             e.__class__ = ServerError
             raise
-        except urllib2.URLError, e:
+        except urllib.error.URLError as e:
             raise ConnectionError('URLError: %s' % str(e))
-        except httplib.BadStatusLine, e:
+        except http.client.BadStatusLine as e:
             raise ConnectionError('BadStatusLine: %s' %  e)
-        except SAXParseException, e:
+        except SAXParseException as e:
             raise ParseError("Failed to parse the BIGIP's response. This "
                 "was likely caused by a 500 error message.")
         return result_processor.process(result)
 
     wrapped_method.__doc__ = usage
-    wrapped_method.__name__ = method.method.name.encode("utf-8")
+    wrapped_method.__name__ = str(method.method.name)
     # It's occasionally convenient to be able to grab the suds object directly
     wrapped_method._method = method
     return wrapped_method
@@ -563,7 +563,7 @@ class _DefaultArgProcessor(_ArgProcessor):
             return value
 
         if isinstance(value, dict):
-            for name, value in value.items():
+            for name, val in value.items():
                 # The new object we created has the type of each attribute
                 # accessible via the attribute's class name.
                 try:
@@ -574,13 +574,13 @@ class _DefaultArgProcessor(_ArgProcessor):
                         '"%s" is not a valid attribute for %s, '
                         'expecting: %s' % (name, obj.__class__.__name__,
                                            valid_attrs))
-                setattr(obj, name, self._process_arg(class_name, value))
+                setattr(obj, name, self._process_arg(class_name, val))
             return obj
 
         array_type = self._array_type(obj)
         if array_type is not None:
             # This is a common mistake. We might as well catch it here.
-            if isinstance(value, basestring):
+            if isinstance(value, str):
                 raise ArgumentError(
                     '%s needs an iterable, but was specified as a string: '
                     '"%s"' % (obj.__class__.__name__, value))
@@ -650,11 +650,11 @@ class _NativeResultProcessor(_ResultProcessor):
             for attr_name, attr_value in value:
                 d[attr_name] = self._convert_to_native_type(attr_value)
             return d
-        elif isinstance(value, unicode):
+        elif isinstance(value, str):
             # This handles suds.sax.text.Text as well, as it derives from
             # unicode.
             return str(value)
-        elif isinstance(value, long):
+        elif isinstance(value, int):
             return int(value)
         return value
 
