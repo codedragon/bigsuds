@@ -22,7 +22,7 @@ setup(
     author='F5 Networks, Inc.',
     author_email='devcentral@f5.com',
     url='http://devcentral.f5.com',
-    install_requires=['suds>=0.4'],
+    install_requires=['suds-jurko>=0.4'],
     py_modules=['bigsuds'],
     test_suite='nose.collector',
     tests_require=['nose', 'mock', 'mox'],
